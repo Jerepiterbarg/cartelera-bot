@@ -11,6 +11,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Descargar el repo
         uses: actions/checkout@v4
@@ -21,6 +22,8 @@ jobs:
           python-version: "3.11"
 
       - name: Instalar dependencias
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
