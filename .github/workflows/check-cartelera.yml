@@ -12,21 +12,14 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.47.0-jammy
     steps:
       - name: Descargar el repo
         uses: actions/checkout@v4
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Instalar dependencias
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          pip install -r requirements.txt
-          playwright install --with-deps chromium
+      - name: Instalar dependencias de Python
+        run: pip install -r requirements.txt
 
       - name: Ejecutar scraper
         env:
@@ -36,6 +29,7 @@ jobs:
 
       - name: Guardar avisos vistos
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "cartelera-bot"
           git config user.email "actions@github.com"
           git add data/seen.json
