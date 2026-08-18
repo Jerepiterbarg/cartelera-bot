@@ -1,0 +1,40 @@
+name: Chequear Cartelera Virtual
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # cada 1 hora, en punto (UTC)
+  workflow_dispatch: {}    # permite correrlo manualmente desde la pestaña Actions
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Ejecutar scraper
+        env:
+          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+        run: python scraper.py
+
+      - name: Guardar avisos ya vistos
+        run: |
+          git config user.name "cartelera-bot"
+          git config user.email "actions@github.com"
+          git add data/seen.json
+          git diff --quiet --cached || git commit -m "Actualizar avisos vistos"
+          git push
