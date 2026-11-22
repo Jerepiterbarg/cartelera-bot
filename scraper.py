@@ -51,15 +51,38 @@ def materia_interesa(materia: str) -> bool:
     return any(m in t for m in MATERIAS)
 
 
-async def obtener_texto_cartelera() -> str:
+async def _cargar_pagina(ignorar_https: bool) -> str:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle", timeout=60000)
-        await page.wait_for_timeout(3000)  # margen para que cargue el AJAX
-        texto = await page.inner_text("body")
-        await browser.close()
-        return texto
+        try:
+            context = await browser.new_context(ignore_https_errors=ignorar_https)
+            page = await context.new_page()
+            await page.goto(URL, wait_until="networkidle", timeout=60000)
+            await page.wait_for_timeout(3000)  # margen para que cargue el AJAX
+            return await page.inner_text("body")
+        finally:
+            await browser.close()
+
+
+async def obtener_texto_cartelera() -> str:
+    """Reintenta hasta 3 veces ante fallos puntuales del sitio.
+
+    Los dos primeros intentos validan el certificado HTTPS normalmente.
+    Si el sitio de la facultad sigue con el certificado inválido, el último
+    intento lo ignora (solo se lee una página pública, no se envía ningún dato).
+    """
+    intentos = 3
+    for i in range(1, intentos + 1):
+        ignorar = i == intentos
+        try:
+            if ignorar:
+                print("Último intento: se ignoran errores de certificado HTTPS.")
+            return await _cargar_pagina(ignorar)
+        except Exception as e:
+            print(f"Intento {i}/{intentos} falló: {str(e)[:200]}")
+            if i == intentos:
+                raise
+            await asyncio.sleep(20 * i)
 
 
 def parsear_avisos(texto: str):
@@ -95,7 +118,7 @@ def guardar_vistos(vistos: set):
     )
 
 
-def enviar_whatsapp(texto: str):
+def enviar_whatsapp(texto: str) -> bool:
     phone = os.environ["PHONE_NUMBER"]
     apikey = os.environ["CALLMEBOT_APIKEY"]
     resp = requests.get(
@@ -104,34 +127,52 @@ def enviar_whatsapp(texto: str):
         timeout=30,
     )
     print("CallMeBot respondió:", resp.status_code, resp.text[:200])
+    # CallMeBot devuelve 200 y "Message queued" cuando realmente lo envía.
+    # Cualquier otra cosa (ej. error de formato) no debe marcarse como enviado.
+    return resp.status_code == 200 and "queued" in resp.text.lower()
+
+
+def construir_mensaje(avisos_nuevos: list) -> str:
+    partes = []
+    for aviso in avisos_nuevos:
+        partes.append(
+            f"📢 {aviso['materia']}\n"
+            f"🗓️ {aviso['fecha']}\n"
+            f"📌 {aviso['titulo']}\n\n"
+            f"{aviso['cuerpo'][:300]}\n"
+            f"👤 {aviso['autor']}"
+        )
+    mensaje = "\n\n➖➖➖\n\n".join(partes)
+    if len(mensaje) > 3000:
+        mensaje = mensaje[:3000] + "\n\n(hay más avisos, recortado por espacio)"
+    return mensaje
 
 
 def main():
     texto = asyncio.run(obtener_texto_cartelera())
     avisos = parsear_avisos(texto)
     vistos = cargar_vistos()
-    nuevos = 0
 
+    avisos_nuevos = []
     for aviso in avisos:
         if not materia_interesa(aviso["materia"]):
             continue
-        h = hash_aviso(aviso)
-        if h in vistos:
+        if hash_aviso(aviso) in vistos:
             continue
+        avisos_nuevos.append(aviso)
 
-        mensaje = (
-            f"📢 {aviso['materia']}\n"
-            f"🗓️ {aviso['fecha']}\n"
-            f"📌 {aviso['titulo']}\n\n"
-            f"{aviso['cuerpo'][:500]}\n\n"
-            f"👤 {aviso['autor']}"
-        )
-        enviar_whatsapp(mensaje)
-        vistos.add(h)
-        nuevos += 1
+    if not avisos_nuevos:
+        print("Sin novedades.")
+        return
 
-    guardar_vistos(vistos)
-    print(f"Listo. Avisos nuevos enviados: {nuevos}")
+    mensaje = construir_mensaje(avisos_nuevos)
+    if enviar_whatsapp(mensaje):
+        for aviso in avisos_nuevos:
+            vistos.add(hash_aviso(aviso))
+        guardar_vistos(vistos)
+        print(f"Listo. Avisos nuevos enviados en un solo mensaje: {len(avisos_nuevos)}")
+    else:
+        print("No se pudo enviar el mensaje. No se marca nada como visto (se reintentará en la próxima corrida).")
 
 
 if __name__ == "__main__":
